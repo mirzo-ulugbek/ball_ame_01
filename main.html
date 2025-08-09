@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ko'payuvchi Koptok O'yini</title>
+    <!-- Ovoz uchun Tone.js kutubxonasini qo'shish -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: center;
+            height: 100vh;
+            background-color: #1a1a2e;
+            color: #e0e0e0;
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            background-color: #162447;
+            border-radius: 50%;
+        }
+        #info {
+            text-align: center;
+            width: 100%;
+            padding-bottom: 20px;
+            position: relative;
+        }
+        h1 {
+            margin: 0;
+            font-size: 2.5em;
+            color: #e94560;
+        }
+        p {
+            margin: 10px 0 0;
+            font-size: 1.5em;
+        }
+        #gameContainer {
+            flex-grow: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+        }
+        #muteButton {
+            position: absolute;
+            top: 10px;
+            right: 20px;
+            background: #e94560;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+        }
+        #muteButton:hover {
+            background: #d43d51;
+        }
+    </style>
+</head>
+<body>
+
+<div id="info">
+    <h1>Ko'payuvchi Koptoklar</h1>
+    <p>Koptoklar soni: <span id="ballCount">1</span></p>
+    <button id="muteButton">Ovozni o'chirish</button>
+</div>
+
+<div id="gameContainer">
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+
+<script>
+    // Canvas va uning kontekstini sozlash
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const ballCountSpan = document.getElementById('ballCount');
+    const gameContainer = document.getElementById('gameContainer');
+    const muteButton = document.getElementById('muteButton');
+
+    // O'lchamlarni sozlash
+    let size = Math.min(gameContainer.clientWidth, gameContainer.clientHeight) * 0.9;
+    canvas.width = size;
+    canvas.height = size;
+
+    // Asosiy aylana sozlamalari
+    const circle = {
+        x: canvas.width / 2,
+        y: canvas.height / 2,
+        radius: Math.max(1, size / 2 - 15),
+        gapAngle: Math.PI / 4,
+        rotationSpeed: 0.005,
+        currentAngle: 0
+    };
+
+    // O'yin o'zgaruvchilari
+    let balls = [];
+    let particles = [];
+    const MAX_BALLS = 3000;
+    let gameState = 'playing';
+    let isMuted = false;
+    let audioStarted = false;
+    let hitSoundPlayedThisFrame = false;
+
+    const colors = ['#f0cf65', '#d7816a', '#bd4f6c', '#851e3e', '#e94560'];
+
+    // Ovoz effektlarini sozlash
+    const hitSound = new Tone.Synth({
+        oscillator: { type: 'square' },
+        envelope: { attack: 0.005, decay: 0.1, sustain: 0.1, release: 0.2 },
+        volume: -6
+    }).toDestination();
+    const escapeSound = new Tone.Synth({ oscillator: { type: 'triangle' }, envelope: { attack: 0.01, decay: 0.2, sustain: 0, release: 0.2 } }).toDestination();
+    const explosionSound = new Tone.NoiseSynth({ noise: { type: 'white' }, envelope: { attack: 0.01, decay: 0.5, sustain: 0.1, release: 0.5 } }).toDestination();
+
+    // Koptok klasi
+    class Ball {
+        constructor(x, y, radius, color, dx, dy) {
+            this.x = x; this.y = y; this.radius = radius;
+            this.color = color; this.dx = dx; this.dy = dy;
+        }
+        draw() {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fillStyle = this.color;
+            ctx.fill();
+            ctx.closePath();
+        }
+        update() {
+            this.x += this.dx;
+            this.y += this.dy;
+            this.draw();
+        }
+    }
+    
+    // Portlash zarrachasi klasi
+    class Particle {
+        constructor(x, y, color, dx, dy) {
+            this.x = x; this.y = y; this.size = Math.random() * 5 + 2;
+            this.color = color; this.dx = dx; this.dy = dy;
+            this.life = 1;
+        }
+        draw() {
+            ctx.globalAlpha = this.life;
+            ctx.fillStyle = this.color;
+            ctx.fillRect(this.x, this.y, this.size, this.size);
+            ctx.globalAlpha = 1.0;
+        }
+        update() {
+            this.x += this.dx;
+            this.y += this.dy;
+            this.life -= 0.01;
+            this.draw();
+        }
+    }
+
+    function createBall() {
+        if (balls.length >= MAX_BALLS) return;
+        const radius = 8;
+        const color = colors[Math.floor(Math.random() * colors.length)];
+        const angle = Math.random() * Math.PI * 2;
+        const spawnRadius = Math.random() * (circle.radius - radius * 2);
+        const x = circle.x + Math.cos(angle) * spawnRadius;
+        const y = circle.y + Math.sin(angle) * spawnRadius;
+        const speed = 5;
+        const direction = Math.random() * Math.PI * 2;
+        const dx = Math.cos(direction) * speed;
+        const dy = Math.sin(direction) * speed;
+        balls.push(new Ball(x, y, radius, color, dx, dy));
+    }
+
+    function drawCircle() {
+        if (circle.radius <= 0) return;
+        ctx.beginPath();
+        const startAngle = circle.currentAngle + circle.gapAngle / 2;
+        const endAngle = circle.currentAngle - circle.gapAngle / 2 + Math.PI * 2;
+        ctx.arc(circle.x, circle.y, circle.radius, startAngle, endAngle);
+        ctx.strokeStyle = '#e94560';
+        ctx.lineWidth = 10;
+        ctx.stroke();
+        ctx.closePath();
+    }
+    
+    function triggerExplosion() {
+        gameState = 'exploding';
+        if (!isMuted) explosionSound.triggerAttackRelease("2n");
+        const particleCount = 200;
+        for (let i = 0; i < particleCount; i++) {
+            const angle = (i / particleCount) * Math.PI * 2;
+            const x = circle.x + Math.cos(angle) * circle.radius;
+            const y = circle.y + Math.sin(angle) * circle.radius;
+            const speed = Math.random() * 5 + 2;
+            const dx = Math.cos(angle) * speed;
+            const dy = Math.sin(angle) * speed;
+            const color = colors[Math.floor(Math.random() * colors.length)];
+            particles.push(new Particle(x, y, color, dx, dy));
+        }
+        balls = [];
+    }
+
+    function resetGame() {
+        gameState = 'playing';
+        createBall();
+    }
+
+    function checkCollision() {
+        for (let i = balls.length - 1; i >= 0; i--) {
+            const ball = balls[i];
+            const dist = Math.sqrt((ball.x - circle.x)**2 + (ball.y - circle.y)**2);
+            
+            if (dist + ball.radius > circle.radius) {
+                let ballAngle = Math.atan2(ball.y - circle.y, ball.x - circle.x);
+                if (ballAngle < 0) ballAngle += 2 * Math.PI;
+                let gapStart = (circle.currentAngle - circle.gapAngle / 2 + 2 * Math.PI) % (2 * Math.PI);
+                let gapEnd = (circle.currentAngle + circle.gapAngle / 2 + 2 * Math.PI) % (2 * Math.PI);
+                let isInGap = gapStart < gapEnd ? (ballAngle > gapStart && ballAngle < gapEnd) : (ballAngle > gapStart || ballAngle < gapEnd);
+
+                if (isInGap) {
+                    if (dist > circle.radius + ball.radius) {
+                        if (!isMuted) escapeSound.triggerAttackRelease("G4", "8n");
+                        balls.splice(i, 1);
+                        createBall();
+                        createBall();
+                    }
+                } else {
+                    // Devorga urilish logikasi
+                    if (!isMuted && !hitSoundPlayedThisFrame) {
+                        hitSound.triggerAttackRelease("A1", "16n");
+                        hitSoundPlayedThisFrame = true;
+                    }
+
+                    // 1. Tezlikni qaytarish
+                    const nx = (ball.x - circle.x) / dist;
+                    const ny = (ball.y - circle.y) / dist;
+                    const p = 2 * (ball.dx * nx + ball.dy * ny);
+                    ball.dx -= p * nx;
+                    ball.dy -= p * ny;
+
+                    // 2. XATOLIKNI TUZATISH (YANADA ISHONCHLI USUL): Koptokni aniq chegara ustiga joylashtirish
+                    ball.x = circle.x + nx * (circle.radius - ball.radius);
+                    ball.y = circle.y + ny * (circle.radius - ball.radius);
+                }
+            }
+        }
+    }
+
+    function animate() {
+        hitSoundPlayedThisFrame = false;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (gameState === 'playing') {
+            circle.currentAngle += circle.rotationSpeed;
+            drawCircle();
+            balls.forEach(ball => ball.update());
+            checkCollision();
+            ballCountSpan.textContent = balls.length;
+
+            if (balls.length >= MAX_BALLS) {
+                triggerExplosion();
+            }
+        } else if (gameState === 'exploding') {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.update();
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                }
+            }
+            if (particles.length === 0) {
+                resetGame();
+            }
+        }
+
+        requestAnimationFrame(animate);
+    }
+
+    // Ovozni boshqarish tugmasi
+    muteButton.addEventListener('click', () => {
+        if (!audioStarted) {
+            Tone.start();
+            audioStarted = true;
+            console.log('Audio context started');
+        }
+        isMuted = !isMuted;
+        muteButton.textContent = isMuted ? "Ovozni yoqish" : "Ovozni o'chirish";
+    });
+
+    // O'yinni boshlash
+    resetGame();
+    animate();
+
+    window.addEventListener('resize', () => {
+        size = Math.min(gameContainer.clientWidth, gameContainer.clientHeight) * 0.9;
+        canvas.width = size;
+        canvas.height = size;
+        circle.x = canvas.width / 2;
+        circle.y = canvas.height / 2;
+        circle.radius = Math.max(1, size / 2 - 15);
+    });
+
+</script>
+
+</body>
+</html>
