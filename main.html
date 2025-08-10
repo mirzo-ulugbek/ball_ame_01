@@ -4,8 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ko'payuvchi Koptok O'yini</title>
-    <!-- Ovoz uchun Tone.js kutubxonasini qo'shish -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js"></script>
     <style>
         body {
             margin: 0;
@@ -68,8 +66,8 @@
 <body>
 
 <div id="info">
-    <h1>Ko'payuvchi Koptoklar</h1>
-    <p>Koptoklar soni: <span id="ballCount">1</span></p>
+    <h1>Multiplying Balls</h1>
+    <p>Number of balls: <span id="ballCount">1</span></p>
     <button id="muteButton">Ovozni o'chirish</button>
 </div>
 
@@ -106,20 +104,53 @@
     let particles = [];
     const MAX_BALLS = 3000;
     let gameState = 'playing';
+    
+    // Ovoz uchun o'zgaruvchilar
     let isMuted = false;
-    let audioStarted = false;
-    let hitSoundPlayedThisFrame = false;
+    let audioContext;
+    let lastHitSoundTime = 0;
+    const hitSoundCooldown = 50; 
 
     const colors = ['#f0cf65', '#d7816a', '#bd4f6c', '#851e3e', '#e94560'];
 
-    // Ovoz effektlarini sozlash
-    const hitSound = new Tone.Synth({
-        oscillator: { type: 'square' },
-        envelope: { attack: 0.005, decay: 0.1, sustain: 0.1, release: 0.2 },
-        volume: -6
-    }).toDestination();
-    const escapeSound = new Tone.Synth({ oscillator: { type: 'triangle' }, envelope: { attack: 0.01, decay: 0.2, sustain: 0, release: 0.2 } }).toDestination();
-    const explosionSound = new Tone.NoiseSynth({ noise: { type: 'white' }, envelope: { attack: 0.01, decay: 0.5, sustain: 0.1, release: 0.5 } }).toDestination();
+    // Yengil ovoz funksiyalari
+    function playSound(type, frequency, duration) {
+        if (isMuted || !audioContext) return;
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+
+        oscillator.type = type;
+        oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+        
+        gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + duration);
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + duration);
+    }
+
+    function playExplosionSound() {
+        if (isMuted || !audioContext) return;
+        const source = audioContext.createBufferSource();
+        const buffer = audioContext.createBuffer(1, audioContext.sampleRate * 1, audioContext.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < data.length; i++) {
+            data[i] = Math.random() * 2 - 1;
+        }
+        source.buffer = buffer;
+
+        const gainNode = audioContext.createGain();
+        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 1);
+
+        source.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        source.start();
+    }
+
 
     // Koptok klasi
     class Ball {
@@ -191,7 +222,7 @@
     
     function triggerExplosion() {
         gameState = 'exploding';
-        if (!isMuted) explosionSound.triggerAttackRelease("2n");
+        playExplosionSound();
         const particleCount = 200;
         for (let i = 0; i < particleCount; i++) {
             const angle = (i / particleCount) * Math.PI * 2;
@@ -225,26 +256,24 @@
 
                 if (isInGap) {
                     if (dist > circle.radius + ball.radius) {
-                        if (!isMuted) escapeSound.triggerAttackRelease("G4", "8n");
+                        playSound('triangle', 440, 0.2); // Escape sound
                         balls.splice(i, 1);
                         createBall();
                         createBall();
                     }
                 } else {
-                    // Devorga urilish logikasi
-                    if (!isMuted && !hitSoundPlayedThisFrame) {
-                        hitSound.triggerAttackRelease("A1", "16n");
-                        hitSoundPlayedThisFrame = true;
+                    const now = Date.now();
+                    if (balls.length < 30 || now - lastHitSoundTime > hitSoundCooldown) {
+                        playSound('square', 80, 0.1); // Hit sound
+                        lastHitSoundTime = now;
                     }
-
-                    // 1. Tezlikni qaytarish
+                    
                     const nx = (ball.x - circle.x) / dist;
                     const ny = (ball.y - circle.y) / dist;
                     const p = 2 * (ball.dx * nx + ball.dy * ny);
                     ball.dx -= p * nx;
                     ball.dy -= p * ny;
 
-                    // 2. XATOLIKNI TUZATISH (YANADA ISHONCHLI USUL): Koptokni aniq chegara ustiga joylashtirish
                     ball.x = circle.x + nx * (circle.radius - ball.radius);
                     ball.y = circle.y + ny * (circle.radius - ball.radius);
                 }
@@ -253,7 +282,6 @@
     }
 
     function animate() {
-        hitSoundPlayedThisFrame = false;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         if (gameState === 'playing') {
@@ -284,9 +312,8 @@
 
     // Ovozni boshqarish tugmasi
     muteButton.addEventListener('click', () => {
-        if (!audioStarted) {
-            Tone.start();
-            audioStarted = true;
+        if (!audioContext) {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
             console.log('Audio context started');
         }
         isMuted = !isMuted;
